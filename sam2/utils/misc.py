@@ -114,6 +114,7 @@ class AsyncVideoFrameLoader:
         img_mean,
         img_std,
         compute_device,
+        lazy = True # NOTE
     ):
         self.img_paths = img_paths
         self.image_size = image_size
@@ -128,11 +129,13 @@ class AsyncVideoFrameLoader:
         self.video_height = None
         self.video_width = None
         self.compute_device = compute_device
+        self.lazy=lazy
 
         # load the first frame to fill video_height and video_width and also
         # to cache it (since it's most likely where the user will click)
         self.__getitem__(0)
-
+        if self.lazy:
+            return
         # load the rest of frames asynchronously without blocking the session start
         def _load_frames():
             try:
@@ -162,12 +165,23 @@ class AsyncVideoFrameLoader:
         img /= self.img_std
         if not self.offload_video_to_cpu:
             img = img.to(self.compute_device, non_blocking=True)
-        self.images[index] = img
+        if not self.lazy:
+            self.images[index] = img # NOTE
         return img
 
     def __len__(self):
         return len(self.images)
 
+def sort_atari_frames(s) -> tuple[int, int, int, int]:
+    s_ = s.split("_")
+    frame_number, episode_number, day, month = (
+        int(s_[1]),
+        int(s_[-1][:-4]),
+        int(s_[2]),
+        int(s_[3]),
+    )
+
+    return (month, day, episode_number, frame_number)
 
 def load_video_frames(
     video_path,
@@ -177,6 +191,7 @@ def load_video_frames(
     img_std=(0.229, 0.224, 0.225),
     async_loading_frames=False,
     compute_device=torch.device("cuda"),
+    max_frame_num_to_track=None
 ):
     """
     Load the video frames from a directory of JPEG files ("<frame_index>.jpg" format).
@@ -202,9 +217,11 @@ def load_video_frames(
     frame_names = [
         p
         for p in os.listdir(jpg_folder)
-        if os.path.splitext(p)[-1] in [".jpg", ".jpeg", ".JPG", ".JPEG"]
+        if os.path.splitext(p)[-1] in [".jpg", ".jpeg", ".JPG", ".JPEG", ".png"]
     ]
-    frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
+    frame_names.sort(key=sort_atari_frames)
+    if max_frame_num_to_track is not None:
+        frame_names = frame_names[:max_frame_num_to_track]
     num_frames = len(frame_names)
     if num_frames == 0:
         raise RuntimeError(f"no images found in {jpg_folder}")

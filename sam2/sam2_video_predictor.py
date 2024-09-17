@@ -43,6 +43,7 @@ class SAM2VideoPredictor(SAM2Base):
         offload_video_to_cpu=False,
         offload_state_to_cpu=False,
         async_loading_frames=False,
+        max_frame_num_to_track=None
     ):
         """Initialize an inference state."""
         compute_device = self.device  # device of the model
@@ -52,6 +53,7 @@ class SAM2VideoPredictor(SAM2Base):
             offload_video_to_cpu=offload_video_to_cpu,
             async_loading_frames=async_loading_frames,
             compute_device=compute_device,
+            max_frame_num_to_track=max_frame_num_to_track
         )
         inference_state = {}
         inference_state["images"] = images
@@ -759,6 +761,7 @@ class SAM2VideoPredictor(SAM2Base):
     @torch.inference_mode()
     def reset_state(self, inference_state):
         """Remove all input points or mask in all frames throughout the video."""
+        # NOTE does not remove cached features
         self._reset_tracking_results(inference_state)
         # Remove all object ids
         inference_state["obj_id_to_idx"].clear()
