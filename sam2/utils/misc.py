@@ -91,7 +91,8 @@ def mask_to_box(masks: torch.Tensor):
 
 def _load_img_as_tensor(img_path, image_size):
     img_pil = Image.open(img_path)
-    img_np = np.array(img_pil.convert("RGB").resize((image_size, image_size)))
+    img_np = np.array(
+        img_pil.convert("RGB").resize((image_size, image_size), Image.NEAREST)) # SUPER NOTE
     if img_np.dtype == np.uint8:  # np.uint8 is expected for JPEG images
         img_np = img_np / 255.0
     else:

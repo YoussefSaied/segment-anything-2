@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.transforms import Normalize, Resize, ToTensor
+from torchvision.transforms.functional import InterpolationMode
 
 
 class SAM2Transforms(nn.Module):
@@ -29,7 +30,9 @@ class SAM2Transforms(nn.Module):
         self.to_tensor = ToTensor()
         self.transforms = torch.jit.script(
             nn.Sequential(
-                Resize((self.resolution, self.resolution)),
+                Resize((self.resolution, self.resolution), 
+                    #    InterpolationMode.NEAREST
+                       ),
                 Normalize(self.mean, self.std),
             )
         )
