@@ -652,15 +652,19 @@ class SAM2VideoPredictor(SAM2Base):
     def move_forward_in_video(
         self,
         frame_idx,
-        consolidated_frame_inds,
-        output_dict,
-        clear_non_cond_mem,
         inference_state,
         reverse=False,
     ):
         """Move forward in the video to the next frame."""
+        output_dict = inference_state["output_dict"]
+        consolidated_frame_inds = inference_state["consolidated_frame_inds"]
         obj_ids = inference_state["obj_ids"]
         batch_size = self._get_obj_num(inference_state)
+        clear_non_cond_mem = self.clear_non_cond_mem_around_input and (
+            self.clear_non_cond_mem_for_multi_obj or batch_size <= 1
+        )
+        if len(output_dict["cond_frame_outputs"]) == 0:
+            raise RuntimeError("No points are provided; please add points first")
 
         # We skip those frames already in consolidated outputs (these are frames
         # that received input clicks or mask). Note that we cannot directly run
@@ -699,20 +703,8 @@ class SAM2VideoPredictor(SAM2Base):
         # Resize the output mask to the original video resolution (we directly use
         # the mask scores on GPU for output to avoid any CPU conversion in between)
         _, video_res_masks = self._get_orig_video_res_output(inference_state, pred_masks)
-        yield frame_idx, obj_ids, video_res_masks
+        return frame_idx, obj_ids, video_res_masks
         
-    @torch.inference_mode()
-    def setup_preflight(self, inference_state):
-        output_dict = inference_state["output_dict"]
-        consolidated_frame_inds = inference_state["consolidated_frame_inds"]
-        batch_size = self._get_obj_num(inference_state)
-        if len(output_dict["cond_frame_outputs"]) == 0:
-            raise RuntimeError("No points are provided; please add points first")
-        clear_non_cond_mem = self.clear_non_cond_mem_around_input and (
-            self.clear_non_cond_mem_for_multi_obj or batch_size <= 1
-        )
-        return output_dict, consolidated_frame_inds, clear_non_cond_mem
-
 
     @torch.inference_mode()
     def propagate_in_video(
