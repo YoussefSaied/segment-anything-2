@@ -14,6 +14,7 @@ from tqdm import tqdm
 from sam2.modeling.sam2_base import NO_OBJ_SCORE, SAM2Base
 from sam2.utils.misc import concat_points, fill_holes_in_mask_scores, load_video_frames
 
+# TODO convert dicts to FIFO
 
 class SAM2VideoPredictor(SAM2Base):
     """The predictor class to handle user interactions and manage inference states."""
@@ -39,25 +40,27 @@ class SAM2VideoPredictor(SAM2Base):
     @torch.inference_mode()
     def init_state(
         self,
-        video_path,
+        initial_frame,
         offload_video_to_cpu=False,
         offload_state_to_cpu=False,
-        async_loading_frames=False,
-        max_frame_num_to_track=None
+        num_frames = int(1e5),
+        video_height=210,
+        video_width=160,
     ):
         """Initialize an inference state."""
         compute_device = self.device  # device of the model
-        images, video_height, video_width = load_video_frames(
-            video_path=video_path,
-            image_size=self.image_size,
-            offload_video_to_cpu=offload_video_to_cpu,
-            async_loading_frames=async_loading_frames,
-            compute_device=compute_device,
-            max_frame_num_to_track=max_frame_num_to_track
-        )
+        # images, video_height, video_width = load_video_frames(
+        #     video_path=video_path,
+        #     image_size=self.image_size,
+        #     offload_video_to_cpu=offload_video_to_cpu,
+        #     async_loading_frames=async_loading_frames,
+        #     compute_device=compute_device,
+        #     max_frame_num_to_track=max_frame_num_to_track
+        # )
         inference_state = {}
-        inference_state["images"] = images
-        inference_state["num_frames"] = len(images)
+        inference_state["current_frame"] = initial_frame
+        # inference_state["images"] = images
+        inference_state["num_frames"] = num_frames
         # whether to offload the video frames to CPU memory
         # turning on this option saves the GPU memory with only a very small overhead
         inference_state["offload_video_to_cpu"] = offload_video_to_cpu
@@ -646,6 +649,72 @@ class SAM2VideoPredictor(SAM2Base):
         assert all_consolidated_frame_inds == input_frames_inds
 
     @torch.inference_mode()
+    def move_forward_in_video(
+        self,
+        frame_idx,
+        consolidated_frame_inds,
+        output_dict,
+        clear_non_cond_mem,
+        inference_state,
+        reverse=False,
+    ):
+        """Move forward in the video to the next frame."""
+        obj_ids = inference_state["obj_ids"]
+        batch_size = self._get_obj_num(inference_state)
+
+        # We skip those frames already in consolidated outputs (these are frames
+        # that received input clicks or mask). Note that we cannot directly run
+        # batched forward on them via `_run_single_frame_inference` because the
+        # number of clicks on each object might be different.
+        if frame_idx in consolidated_frame_inds["cond_frame_outputs"]:
+            storage_key = "cond_frame_outputs"
+            current_out = output_dict[storage_key][frame_idx]
+            pred_masks = current_out["pred_masks"]
+            if clear_non_cond_mem:
+                # clear non-conditioning memory of the surrounding frames
+                self._clear_non_cond_mem_around_input(inference_state, frame_idx)
+        elif frame_idx in consolidated_frame_inds["non_cond_frame_outputs"]:
+            storage_key = "non_cond_frame_outputs"
+            current_out = output_dict[storage_key][frame_idx]
+            pred_masks = current_out["pred_masks"]
+        else:
+            storage_key = "non_cond_frame_outputs"
+            current_out, pred_masks = self._run_single_frame_inference(
+                inference_state=inference_state,
+                output_dict=output_dict,
+                frame_idx=frame_idx,
+                batch_size=batch_size,
+                is_init_cond_frame=False,
+                point_inputs=None,
+                mask_inputs=None,
+                reverse=reverse,
+                run_mem_encoder=True,
+            )
+            output_dict[storage_key][frame_idx] = current_out
+        # Create slices of per-object outputs for subsequent interaction with each
+        # individual object after tracking.
+        self._add_output_per_object(inference_state, frame_idx, current_out, storage_key)
+        inference_state["frames_already_tracked"][frame_idx] = {"reverse": reverse}
+
+        # Resize the output mask to the original video resolution (we directly use
+        # the mask scores on GPU for output to avoid any CPU conversion in between)
+        _, video_res_masks = self._get_orig_video_res_output(inference_state, pred_masks)
+        yield frame_idx, obj_ids, video_res_masks
+        
+    @torch.inference_mode()
+    def setup_preflight(self, inference_state):
+        output_dict = inference_state["output_dict"]
+        consolidated_frame_inds = inference_state["consolidated_frame_inds"]
+        batch_size = self._get_obj_num(inference_state)
+        if len(output_dict["cond_frame_outputs"]) == 0:
+            raise RuntimeError("No points are provided; please add points first")
+        clear_non_cond_mem = self.clear_non_cond_mem_around_input and (
+            self.clear_non_cond_mem_for_multi_obj or batch_size <= 1
+        )
+        return output_dict, consolidated_frame_inds, clear_non_cond_mem
+
+
+    @torch.inference_mode()
     def propagate_in_video(
         self,
         inference_state,
@@ -800,7 +869,8 @@ class SAM2VideoPredictor(SAM2Base):
         if backbone_out is None:
             # Cache miss -- we will run inference on a single image
             device = inference_state["device"]
-            image = inference_state["images"][frame_idx].to(device).float().unsqueeze(0)
+            image = inference_state["current_frame"]
+            image = image.to(device).float().unsqueeze(0)
             backbone_out = self.forward_image(image)
             # Cache the most recent frame's feature (for repeated interactions with
             # a frame; we can use an LRU cache for more frames in the future).
@@ -821,6 +891,7 @@ class SAM2VideoPredictor(SAM2Base):
             expanded_backbone_out["vision_pos_enc"][i] = pos
 
         features = self._prepare_backbone_features(expanded_backbone_out)
+        # prepend the image to the features
         features = (expanded_image,) + features
         return features
 

@@ -171,7 +171,7 @@ class AsyncVideoFrameLoader:
         return img
 
     def __len__(self):
-        return len(self.images)
+        return len(self.img_paths)
 
 def sort_atari_frames(s) -> tuple[int, int, int, int]:
     s_ = s.split("_")
