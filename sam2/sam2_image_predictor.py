@@ -64,6 +64,10 @@ class SAM2ImagePredictor:
             (128, 128),
             (64, 64),
         ]
+        factor_ = 1024 // self.model.image_size
+        self._bb_feat_sizes = [
+            (f[0] // factor_, f[1] // factor_) for f in self._bb_feat_sizes
+        ]
 
     @classmethod
     def from_pretrained(cls, model_id: str, **kwargs) -> "SAM2ImagePredictor":

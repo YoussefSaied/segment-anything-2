@@ -862,7 +862,7 @@ class SAM2VideoPredictor(SAM2Base):
             # Cache miss -- we will run inference on a single image
             device = inference_state["device"]
             image = inference_state["current_frame"]
-            image = image.to(device).float().unsqueeze(0)
+            image = image.to(device).float()
             backbone_out = self.forward_image(image)
             # Cache the most recent frame's feature (for repeated interactions with
             # a frame; we can use an LRU cache for more frames in the future).
